@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { parse, stringify } from "smol-toml";
@@ -18,9 +18,9 @@ const DEFAULT_CONFIG: Config = {
   enabled_providers: ["claude"],
 };
 
-export async function loadConfig(): Promise<Config> {
+export function loadConfig(): Config {
   try {
-    const content = await readFile(CONFIG_PATH, "utf-8");
+    const content = readFileSync(CONFIG_PATH, "utf-8");
     const parsed = parse(content);
     return { ...DEFAULT_CONFIG, ...parsed } as Config;
   } catch {
@@ -28,12 +28,9 @@ export async function loadConfig(): Promise<Config> {
   }
 }
 
-export async function saveConfig(config: Config): Promise<void> {
-  await mkdir(CONFIG_DIR, { recursive: true });
-  await writeFile(
-    CONFIG_PATH,
-    stringify(config as unknown as Record<string, unknown>),
-  );
+export function saveConfig(config: Config): void {
+  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(CONFIG_PATH, stringify(config as unknown as Record<string, unknown>));
 }
 
 export { CONFIG_DIR, CONFIG_PATH };

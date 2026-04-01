@@ -1,6 +1,10 @@
 import type { UsageProvider } from "./types.js";
+import { claudeProvider } from "./claude.js";
 
 const providers: Map<string, UsageProvider> = new Map();
+
+// Auto-register built-in providers
+registerProvider(claudeProvider);
 
 export function registerProvider(provider: UsageProvider): void {
   providers.set(provider.id, provider);
