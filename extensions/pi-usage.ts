@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
 export default function (pi: ExtensionAPI) {
-  pi.registerCommand("pi-usage", {
+  pi.registerCommand("usage", {
     description: "Show AI usage/quota across providers",
     handler: async (args, ctx) => {
       const provider = args?.trim() || undefined;

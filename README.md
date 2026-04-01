@@ -11,7 +11,7 @@ Works standalone or as a [pi](https://github.com/badlogic/pi-mono) extension.
 - **Claude quota tracking** — 5-hour and 7-day rolling windows with donut charts
 - **Per-model breakdown** — see which models are consuming your quota
 - **Auto-refresh** — configurable polling with rate-limit backoff
-- **Pi extension** — `/pi-usage` command and `pi_usage` LLM tool
+- **Pi extension** — `/usage` command and `pi_usage` LLM tool
 - **Standalone CLI** — runs outside pi with `npx pi-usage`
 
 ## Install
@@ -34,18 +34,13 @@ npx pi-usage
 
 ## Setup
 
-Authenticate with Claude (required for v0.1.0):
+If you have **Claude Code** or **pi** installed, credentials are picked up automatically — no setup needed.
+
+For standalone use without Claude Code/pi, run the OAuth flow manually:
 
 ```sh
 pi-usage setup
-```
-
-This uses OAuth to connect to your Anthropic account. If you already have Claude Code credentials (macOS Keychain or `~/.claude/.credentials.json`), they'll be detected automatically — no setup needed.
-
-To force re-authentication:
-
-```sh
-pi-usage setup --re
+pi-usage setup --re   # force re-auth
 ```
 
 ## Usage
@@ -75,8 +70,8 @@ Launches a full-screen dashboard with:
 Inside a pi session:
 
 ```
-/pi-usage              Show usage summary for all configured providers
-/pi-usage claude       Show Claude usage specifically
+/usage              Show usage summary for all configured providers
+/usage claude       Show Claude usage specifically
 ```
 
 The LLM can also call the `pi_usage` tool when you ask about your quota or usage.

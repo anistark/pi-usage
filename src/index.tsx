@@ -5,8 +5,7 @@ import React from "react";
 import { render } from "ink";
 
 import { App } from "./app.js";
-import { validateToken } from "./providers/claude.js";
-import { interactiveSetup } from "./auth/index.js";
+import { isAuthenticated } from "./auth/index.js";
 
 const require = createRequire(import.meta.url);
 const { version: VERSION } = require("../package.json");
@@ -25,17 +24,17 @@ async function main(): Promise<void> {
   }
 
   if (args[0] === "setup") {
+    const { interactiveSetup } = await import("./auth/index.js");
     await interactiveSetup(args.includes("--re"));
     return;
   }
 
-  console.log("Validating OAuth token...");
-  const result = await validateToken();
-  if (!result.ok) {
-    console.error(`\n✗ ${result.reason}\n`);
+  if (!isAuthenticated()) {
+    console.error("\n✗ No credentials found.\n");
+    console.error("If you have Claude Code or pi installed, credentials are picked up automatically.");
+    console.error("Otherwise, run: pi-usage setup\n");
     process.exit(1);
   }
-  console.log("✓ Token is valid.\n");
 
   process.stdout.write("\x1b[?1049h\x1b[2J\x1b[H");
   const instance = render(<App version={VERSION} />);
