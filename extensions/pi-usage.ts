@@ -1,35 +1,35 @@
-import type { ExtensionContext } from "@anthropic/pi-sdk";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
 
-export function activate(ctx: ExtensionContext) {
-  const { commands, tools } = ctx;
-
-  commands.register("pi-usage", {
+export default function (pi: ExtensionAPI) {
+  pi.registerCommand("pi-usage", {
     description: "Show AI usage/quota across providers",
-    args: [
-      { name: "provider", description: "Provider to show (claude, openai, openrouter)", required: false },
-      { name: "--tui", description: "Launch TUI dashboard", required: false },
-    ],
-    async execute(args) {
-      const provider = args.provider as string | undefined;
-
-      if (args["--tui"]) {
-        // TODO: launch TUI via ctx.ui.custom() when available
-        return "TUI mode not yet available in extension context. Use standalone `pi-usage` CLI.";
-      }
+    handler: async (args, ctx) => {
+      const provider = args?.trim() || undefined;
 
       try {
         const { getAvailableProviders, getProvider } = await import("../dist/providers/index.js");
 
         if (provider) {
           const p = getProvider(provider);
-          if (!p) return `Unknown provider: ${provider}`;
-          if (!(await p.isAvailable())) return `${p.name} is not configured. Check your credentials.`;
+          if (!p) {
+            ctx.ui.notify(`Unknown provider: ${provider}`, "warn");
+            return;
+          }
+          if (!(await p.isAvailable())) {
+            ctx.ui.notify(`${p.name} is not configured. Check your credentials.`, "warn");
+            return;
+          }
           const usage = await p.fetchUsage();
-          return formatUsage(p.name, p.icon, usage);
+          ctx.ui.notify(formatUsage(p.name, p.icon, usage), "info");
+          return;
         }
 
         const available = await getAvailableProviders();
-        if (available.length === 0) return "No providers configured. Run `pi-usage setup` for Claude.";
+        if (available.length === 0) {
+          ctx.ui.notify("No providers configured. Run `pi-usage setup` for Claude.", "warn");
+          return;
+        }
 
         const results: string[] = [];
         for (const p of available) {
@@ -40,45 +40,45 @@ export function activate(ctx: ExtensionContext) {
             results.push(`${p.icon} ${p.name}: Error — ${e instanceof Error ? e.message : e}`);
           }
         }
-        return results.join("\n\n");
+        ctx.ui.notify(results.join("\n\n"), "info");
       } catch (e) {
-        return `Error: ${e instanceof Error ? e.message : e}`;
+        ctx.ui.notify(`Error: ${e instanceof Error ? e.message : e}`, "error");
       }
     },
   });
 
-  tools.register("pi_usage", {
+  pi.registerTool({
+    name: "pi_usage",
+    label: "AI Usage",
     description: "Check AI usage quotas and billing across providers (Claude, OpenAI, OpenRouter)",
-    parameters: {
-      type: "object" as const,
-      properties: {
-        provider: {
-          type: "string" as const,
-          description: "Specific provider to check (claude, openai, openrouter). Omit for all.",
-        },
-      },
-    },
-    async execute(params: { provider?: string }) {
+    parameters: Type.Object({
+      provider: Type.Optional(
+        Type.String({ description: "Specific provider to check (claude, openai, openrouter). Omit for all." })
+      ),
+    }),
+    async execute(_toolCallId, params: { provider?: string }, _signal, _onUpdate, _ctx) {
       try {
         const { getAvailableProviders, getProvider } = await import("../dist/providers/index.js");
 
         if (params.provider) {
           const p = getProvider(params.provider);
-          if (!p) return { error: `Unknown provider: ${params.provider}` };
-          if (!(await p.isAvailable())) return { error: `${p.name} not configured` };
-          return await p.fetchUsage();
+          if (!p) return { content: [{ type: "text" as const, text: `Unknown provider: ${params.provider}` }] };
+          if (!(await p.isAvailable())) return { content: [{ type: "text" as const, text: `${p.name} not configured` }] };
+          const usage = await p.fetchUsage();
+          return { content: [{ type: "text" as const, text: JSON.stringify(usage, null, 2) }] };
         }
 
         const available = await getAvailableProviders();
         const results = await Promise.allSettled(available.map((p) => p.fetchUsage()));
-
-        return results.map((r, i) =>
+        const data = results.map((r, i) =>
           r.status === "fulfilled"
             ? r.value
             : { provider: available[i]!.id, error: r.reason?.message ?? "unknown error" }
         );
+
+        return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
       } catch (e) {
-        return { error: e instanceof Error ? e.message : `${e}` };
+        return { content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : e}` }] };
       }
     },
   });
