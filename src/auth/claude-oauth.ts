@@ -64,10 +64,7 @@ function getClaudeCodeCredentials(): OAuthCredentials | null {
     const data = reader();
     if (data) {
       const oauth = data["claudeAiOauth"] as OAuthCredentials | undefined;
-      if (oauth?.accessToken) {
-        if (oauth.expiresAt && oauth.expiresAt < Date.now()) continue;
-        return oauth;
-      }
+      if (oauth?.accessToken) return oauth;
     }
   }
   return null;
@@ -94,7 +91,9 @@ export function loadToken(): Record<string, unknown> | null {
 
 export function getOAuthToken(): string | null {
   const creds = getClaudeCodeCredentials();
-  if (creds?.accessToken) return creds.accessToken;
+  if (creds?.accessToken) {
+    if (!creds.expiresAt || creds.expiresAt > Date.now()) return creds.accessToken;
+  }
 
   const tokenData = loadToken();
   if (!tokenData) return null;
@@ -105,12 +104,7 @@ export function getOAuthToken(): string | null {
   return (tokenData["oauth_token"] as string) ?? null;
 }
 
-async function refreshStoredToken(): Promise<string | null> {
-  const tokenData = loadToken();
-  if (!tokenData) return null;
-
-  const refreshToken = tokenData["refresh_token"] as string | undefined;
-  if (!refreshToken) return null;
+async function refreshToken(refreshTokenStr: string): Promise<string | null> {
 
   let resp: Response;
   try {
@@ -120,7 +114,7 @@ async function refreshStoredToken(): Promise<string | null> {
       body: JSON.stringify({
         grant_type: "refresh_token",
         client_id: OAUTH_CONFIG.clientId,
-        refresh_token: refreshToken,
+        refresh_token: refreshTokenStr,
       }),
       signal: AbortSignal.timeout(15000),
     });
@@ -151,7 +145,19 @@ export async function getValidOAuthToken(): Promise<string | null> {
   const token = getOAuthToken();
   if (token) return token;
 
-  return await refreshStoredToken();
+  // Try refreshing from Claude Code keychain/file credentials
+  const creds = getClaudeCodeCredentials();
+  if (creds?.refreshToken) {
+    const refreshed = await refreshToken(creds.refreshToken);
+    if (refreshed) return refreshed;
+  }
+
+  // Try refreshing from our own stored token
+  const tokenData = loadToken();
+  const storedRefresh = tokenData?.["refresh_token"] as string | undefined;
+  if (storedRefresh) return await refreshToken(storedRefresh);
+
+  return null;
 }
 
 export function getSubscriptionType(): string | null {
@@ -160,7 +166,12 @@ export function getSubscriptionType(): string | null {
 }
 
 export function isAuthenticated(): boolean {
-  return getOAuthToken() !== null;
+  if (getOAuthToken() !== null) return true;
+  const creds = getClaudeCodeCredentials();
+  if (creds?.refreshToken) return true;
+  const tokenData = loadToken();
+  if (tokenData?.["refresh_token"]) return true;
+  return false;
 }
 
 export function clearToken(): void {

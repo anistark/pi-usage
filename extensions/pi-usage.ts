@@ -1,46 +1,23 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
+const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
+const BETA_HEADER = "oauth-2025-04-20";
+
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("usage", {
     description: "Show AI usage/quota across providers",
     handler: async (args, ctx) => {
-      const provider = args?.trim() || undefined;
+      const provider = (args?.trim() || "claude").toLowerCase();
+
+      if (provider !== "claude") {
+        ctx.ui.notify(`Provider "${provider}" not yet supported. Only "claude" is available in v0.1.`, "warn");
+        return;
+      }
 
       try {
-        const { getAvailableProviders, getProvider } = await import("../dist/providers/index.js");
-
-        if (provider) {
-          const p = getProvider(provider);
-          if (!p) {
-            ctx.ui.notify(`Unknown provider: ${provider}`, "warn");
-            return;
-          }
-          if (!(await p.isAvailable())) {
-            ctx.ui.notify(`${p.name} is not configured. Check your credentials.`, "warn");
-            return;
-          }
-          const usage = await p.fetchUsage();
-          ctx.ui.notify(formatUsage(p.name, p.icon, usage), "info");
-          return;
-        }
-
-        const available = await getAvailableProviders();
-        if (available.length === 0) {
-          ctx.ui.notify("No providers configured. Run `pi-usage setup` for Claude.", "warn");
-          return;
-        }
-
-        const results: string[] = [];
-        for (const p of available) {
-          try {
-            const usage = await p.fetchUsage();
-            results.push(formatUsage(p.name, p.icon, usage));
-          } catch (e) {
-            results.push(`${p.icon} ${p.name}: Error — ${e instanceof Error ? e.message : e}`);
-          }
-        }
-        ctx.ui.notify(results.join("\n\n"), "info");
+        const usage = await fetchClaudeUsage(ctx);
+        ctx.ui.notify(formatUsage(usage), "info");
       } catch (e) {
         ctx.ui.notify(`Error: ${e instanceof Error ? e.message : e}`, "error");
       }
@@ -56,27 +33,10 @@ export default function (pi: ExtensionAPI) {
         Type.String({ description: "Specific provider to check (claude, openai, openrouter). Omit for all." })
       ),
     }),
-    async execute(_toolCallId, params: { provider?: string }, _signal, _onUpdate, _ctx) {
+    async execute(_toolCallId, params: { provider?: string }, _signal, _onUpdate, ctx) {
       try {
-        const { getAvailableProviders, getProvider } = await import("../dist/providers/index.js");
-
-        if (params.provider) {
-          const p = getProvider(params.provider);
-          if (!p) return { content: [{ type: "text" as const, text: `Unknown provider: ${params.provider}` }] };
-          if (!(await p.isAvailable())) return { content: [{ type: "text" as const, text: `${p.name} not configured` }] };
-          const usage = await p.fetchUsage();
-          return { content: [{ type: "text" as const, text: JSON.stringify(usage, null, 2) }] };
-        }
-
-        const available = await getAvailableProviders();
-        const results = await Promise.allSettled(available.map((p) => p.fetchUsage()));
-        const data = results.map((r, i) =>
-          r.status === "fulfilled"
-            ? r.value
-            : { provider: available[i]!.id, error: r.reason?.message ?? "unknown error" }
-        );
-
-        return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+        const usage = await fetchClaudeUsage(ctx);
+        return { content: [{ type: "text" as const, text: JSON.stringify(usage, null, 2) }] };
       } catch (e) {
         return { content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : e}` }] };
       }
@@ -84,31 +44,43 @@ export default function (pi: ExtensionAPI) {
   });
 }
 
-function formatUsage(name: string, icon: string, usage: any): string {
-  const lines: string[] = [`${icon} ${name}`];
+async function fetchClaudeUsage(ctx: { modelRegistry: { getApiKeyForProvider(p: string): Promise<string | undefined> } }) {
+  const apiKey = await ctx.modelRegistry.getApiKeyForProvider("anthropic");
+  if (!apiKey) throw new Error("No Anthropic API key found. Make sure you're logged in (`/login`).");
 
-  if (usage.quotas) {
-    for (const q of usage.quotas) {
-      const pct = Math.round(q.usedPercent);
-      const bar = "█".repeat(Math.round(pct / 5)) + "░".repeat(20 - Math.round(pct / 5));
-      let line = `  ${q.label}: ${bar} ${pct}%`;
-      if (q.resetAt) {
-        const diffMin = Math.max(0, Math.round((new Date(q.resetAt).getTime() - Date.now()) / 60000));
-        if (diffMin < 60) line += ` (resets in ${diffMin}m)`;
-        else line += ` (resets in ${Math.floor(diffMin / 60)}h ${diffMin % 60}m)`;
-      }
-      lines.push(line);
+  const resp = await fetch(USAGE_URL, {
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "anthropic-beta": BETA_HEADER,
+    },
+    signal: AbortSignal.timeout(15000),
+  });
+
+  if (resp.status === 401) throw new Error("Token invalid or expired. Try `/login` to re-authenticate.");
+  if (resp.status === 403) throw new Error("Access denied. Token may lack required permissions.");
+  if (resp.status === 429) throw new Error("Rate limited. Try again in a minute.");
+  if (!resp.ok) throw new Error(`API returned status ${resp.status}`);
+
+  return await resp.json();
+}
+
+function formatUsage(data: any): string {
+  const lines: string[] = ["✨ Claude"];
+
+  for (const [key, label] of [["five_hour", "5-Hour Quota"], ["fiveHour", "5-Hour Quota"], ["seven_day", "Weekly Quota"], ["sevenDay", "Weekly Quota"]] as const) {
+    const window = data[key];
+    if (!window) continue;
+    const pct = Math.round(window.utilization ?? window.usage_pct ?? 0);
+    const bar = "█".repeat(Math.round(pct / 5)) + "░".repeat(20 - Math.round(pct / 5));
+    let line = `  ${label}: ${bar} ${pct}%`;
+
+    const resetStr = window.resets_at ?? window.reset_at ?? window.resetAt;
+    if (resetStr) {
+      const diffMin = Math.max(0, Math.round((new Date(resetStr).getTime() - Date.now()) / 60000));
+      if (diffMin < 60) line += ` (resets in ${diffMin}m)`;
+      else line += ` (resets in ${Math.floor(diffMin / 60)}h ${diffMin % 60}m)`;
     }
-  }
-
-  if (usage.credits) {
-    const c = usage.credits;
-    lines.push(`  Balance: ${c.currency}${c.remaining.toFixed(2)} / ${c.currency}${c.limit.toFixed(2)}`);
-  }
-
-  if (usage.billing) {
-    const b = usage.billing;
-    lines.push(`  Today: ${b.currency}${b.dailySpend.toFixed(2)} | Month: ${b.currency}${b.monthlySpend.toFixed(2)}`);
+    lines.push(line);
   }
 
   return lines.join("\n");
